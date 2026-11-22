@@ -1,5 +1,6 @@
-package com.minibank;
+package com.minibank.repository;
 
+import com.minibank.exception.BankDataException;
 import liquibase.Contexts;
 import liquibase.LabelExpression;
 import liquibase.Liquibase;

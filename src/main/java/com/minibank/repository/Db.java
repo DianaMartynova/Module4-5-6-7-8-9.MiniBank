@@ -1,4 +1,4 @@
-package com.minibank;
+package com.minibank.repository;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
