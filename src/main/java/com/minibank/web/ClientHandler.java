@@ -16,6 +16,11 @@ final class ClientHandler extends AbstractJsonHandler {
     }
 
     @Override
+    protected Object handleGet(HttpExchange exchange) {
+        return bank.listClients("fetch=join".equals(exchange.getRequestURI().getQuery()));
+    }
+
+    @Override
     protected Object handlePost(HttpExchange exchange) throws IOException {
         ClientRequest req = Json.read(exchange.getRequestBody(), ClientRequest.class);
 

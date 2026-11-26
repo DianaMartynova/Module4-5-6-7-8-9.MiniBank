@@ -1,6 +1,7 @@
 package com.minibank.web;
 
 import com.minibank.repository.BankService;
+import com.minibank.repository.Jpa;
 import com.minibank.repository.Migrations;
 import com.sun.net.httpserver.HttpServer;
 
@@ -18,7 +19,7 @@ public final class BankHttpServer {
     public static void main(String[] args) throws IOException {
         Migrations.run();
 
-        BankService bank = new BankService();
+        BankService bank = new BankService(Jpa.entityManagerFactory());
 
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
         server.createContext("/transfer", new TransferHandler(bank));

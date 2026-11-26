@@ -14,12 +14,16 @@ abstract class AbstractJsonHandler implements HttpHandler {
     @Override
     public final void handle(HttpExchange exchange) throws IOException {
         try {
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                writeError(exchange, 405,
-                        "Метод " + exchange.getRequestMethod() + " не поддерживается, используйте POST");
+            Object responseBody = switch (exchange.getRequestMethod()) {
+                case "POST" -> handlePost(exchange);
+                case "GET" -> handleGet(exchange);
+                case "DELETE" -> handleDelete(exchange);
+                default -> null;
+            };
+            if (responseBody == null) {
+                writeError(exchange, 405, "Метод " + exchange.getRequestMethod() + " не поддерживается");
                 return;
             }
-            Object responseBody = handlePost(exchange);
             writeJson(exchange, 200, responseBody);
         } catch (NotFoundException e) {
             writeError(exchange, 404, e.getMessage());
@@ -35,6 +39,15 @@ abstract class AbstractJsonHandler implements HttpHandler {
     }
 
     protected abstract Object handlePost(HttpExchange exchange) throws IOException;
+
+    /** null означает, что метод не поддерживается. */
+    protected Object handleGet(HttpExchange exchange) throws IOException {
+        return null;
+    }
+
+    protected Object handleDelete(HttpExchange exchange) throws IOException {
+        return null;
+    }
 
     private void writeError(HttpExchange exchange, int status, String message) throws IOException {
         writeJson(exchange, status, Map.of("error", message == null ? "" : message));

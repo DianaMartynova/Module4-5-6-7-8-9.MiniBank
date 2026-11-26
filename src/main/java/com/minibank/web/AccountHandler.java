@@ -16,6 +16,17 @@ final class AccountHandler extends AbstractJsonHandler {
     }
 
     @Override
+    protected Object handleDelete(HttpExchange exchange) {
+        String query = exchange.getRequestURI().getQuery();
+        if (query == null || !query.startsWith("id=")) {
+            throw new IllegalArgumentException("Нужно указать ?id=номер счёта");
+        }
+        long id = Long.parseLong(query.substring(3));
+        bank.removeAccount(id);
+        return Map.of("status", "deleted", "id", id);
+    }
+
+    @Override
     protected Object handlePost(HttpExchange exchange) throws IOException {
         AccountRequest req = Json.read(exchange.getRequestBody(), AccountRequest.class);
 

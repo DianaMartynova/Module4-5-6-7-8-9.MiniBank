@@ -6,92 +6,82 @@ import com.minibank.exception.NotFoundException;
 import com.minibank.model.Account;
 import com.minibank.model.Client;
 import com.minibank.model.Transaction;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.EntityTransaction;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceException;
 
 import java.math.BigDecimal;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 
 public class BankService {
+
+    private final EntityManagerFactory factory;
+
+    public BankService(EntityManagerFactory factory) {
+        this.factory = factory;
+    }
+
     public Client registerClient(String name, String email) {
-        String sql = "INSERT INTO clients (name, email) VALUES (?, ?) RETURNING id";
-        try (Connection c = Db.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setString(1, name);
-            ps.setString(2, email);
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return new Client(rs.getLong("id"), name, email);
-            }
-        } catch (SQLException e) {
-            throw new BankDataException("Не удалось зарегистрировать клиента " + email, e);
-        }
+        return inTransaction("Не удалось зарегистрировать клиента " + email, em -> {
+            Client client = new Client(name, email);
+            em.persist(client);
+            return client;
+        });
     }
 
     public Account openAccount(Long clientId, String accountNumber) {
-        getClient(clientId);
-
-        String sql = "INSERT INTO accounts (client_id, account_number, balance) "
-                + "VALUES (?, ?, 0) RETURNING id";
-        try (Connection c = Db.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, clientId);
-            ps.setString(2, accountNumber);
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return new Account(rs.getLong("id"), clientId, accountNumber, BigDecimal.ZERO);
-            }
-        } catch (SQLException e) {
-            throw new BankDataException("Не удалось открыть счёт " + accountNumber, e);
-        }
+        return inTransaction("Не удалось открыть счёт " + accountNumber, em -> {
+            Account account = new Account(require(em, Client.class, clientId, "Клиент не найден: "), accountNumber);
+            em.persist(account);
+            return account;
+        });
     }
 
     public Account getAccount(Long accountId) {
-        String sql = "SELECT id, client_id, account_number, balance FROM accounts WHERE id = ?";
-        try (Connection c = Db.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, accountId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    throw new NotFoundException("Счёт не найден: " + accountId);
-                }
-                return new Account(
-                        rs.getLong("id"),
-                        rs.getLong("client_id"),
-                        rs.getString("account_number"),
-                        rs.getBigDecimal("balance"));
-            }
-        } catch (SQLException e) {
-            throw new BankDataException("Не удалось загрузить счёт " + accountId, e);
-        }
+        return read("Не удалось загрузить счёт " + accountId,
+                em -> require(em, Account.class, accountId, "Счёт не найден: "));
     }
 
     public Client getClient(Long clientId) {
-        String sql = "SELECT id, name, email FROM clients WHERE id = ?";
-        try (Connection c = Db.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, clientId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    throw new NotFoundException("Клиент не найден: " + clientId);
-                }
-                return new Client(rs.getLong("id"), rs.getString("name"), rs.getString("email"));
-            }
-        } catch (SQLException e) {
-            throw new BankDataException("Не удалось загрузить клиента " + clientId, e);
-        }
+        return read("Не удалось загрузить клиента " + clientId,
+                em -> require(em, Client.class, clientId, "Клиент не найден: "));
+    }
+
+    /**
+     * Клиенты с номерами счетов. joinFetch = false показывает N+1, true решает проблему.
+     * Коллекции читаются внутри открытого EntityManager, иначе будет LazyInitializationException.
+     */
+    public List<Map<String, Object>> listClients(boolean joinFetch) {
+        String jpql = joinFetch
+                ? "select c from Client c left join fetch c.accounts order by c.id"
+                : "select c from Client c order by c.id";
+        return read("Не удалось загрузить клиентов", em -> em.createQuery(jpql, Client.class)
+                .getResultStream()
+                .map(client -> Map.<String, Object>of(
+                        "id", client.getId(),
+                        "email", client.getEmail(),
+                        "accounts", client.getAccounts().stream().map(Account::getAccountNumber).toList()))
+                .toList());
+    }
+
+    public void removeAccount(Long accountId) {
+        inTransaction("Не удалось удалить счёт " + accountId, em -> {
+            Account account = require(em, Account.class, accountId, "Счёт не найден: ");
+            account.getClient().removeAccount(account);
+            return null;
+        });
     }
 
     public void deposit(Long accountId, BigDecimal amount) {
         requirePositive(amount);
-        inTransaction("Не удалось пополнить счёт " + accountId, c -> {
-            lockAccount(c, accountId);
-            addToBalance(c, accountId, amount);
-            recordTransaction(c, accountId, amount, "DEPOSIT");
+        inTransaction("Не удалось пополнить счёт " + accountId, em -> {
+            Account account = lockAccount(em, accountId);
+            apply(em, account, amount, "DEPOSIT");
             return null;
         });
     }
@@ -101,108 +91,79 @@ public class BankService {
         if (fromAccountId.equals(toAccountId)) {
             throw new IllegalArgumentException("Нельзя переводить деньги на тот же счёт: " + fromAccountId);
         }
-        inTransaction("Не удалось выполнить перевод: " + fromAccountId + " -> " + toAccountId, c -> {
-            Long firstId = Math.min(fromAccountId, toAccountId);
-            Long secondId = Math.max(fromAccountId, toAccountId);
-            Account first = lockAccount(c, firstId);
-            Account second = lockAccount(c, secondId);
-            Account from = firstId.equals(fromAccountId) ? first : second;
+        inTransaction("Не удалось выполнить перевод: " + fromAccountId + " -> " + toAccountId, em -> {
+            // Блокируем в порядке возрастания id, чтобы не получить deadlock
+            Account first = lockAccount(em, Math.min(fromAccountId, toAccountId));
+            Account second = lockAccount(em, Math.max(fromAccountId, toAccountId));
+            Account from = first.getId().equals(fromAccountId) ? first : second;
+            Account to = from == first ? second : first;
 
             if (from.getBalance().compareTo(amount) < 0) {
                 throw new InsufficientFundsException("Недостаточно средств на счёте " + fromAccountId);
             }
-            addToBalance(c, fromAccountId, amount.negate());
-            recordTransaction(c, fromAccountId, amount.negate(), "TRANSFER_OUT");
-            addToBalance(c, toAccountId, amount);
-            recordTransaction(c, toAccountId, amount, "TRANSFER_IN");
+            apply(em, from, amount.negate(), "TRANSFER_OUT");
+            apply(em, to, amount, "TRANSFER_IN");
             return null;
         });
     }
 
     public List<Transaction> getTransactions(Long accountId, LocalDateTime from, LocalDateTime to) {
-        String sql = "SELECT id, account_id, amount, type, transaction_date "
-                + "FROM transactions "
-                + "WHERE account_id = ? AND transaction_date >= ? AND transaction_date < ? "
-                + "ORDER BY transaction_date, id";
-        try (Connection c = Db.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, accountId);
-            ps.setObject(2, from);
-            ps.setObject(3, to);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<Transaction> result = new ArrayList<>();
-                while (rs.next()) {
-                    result.add(new Transaction(
-                            rs.getLong("id"),
-                            rs.getLong("account_id"),
-                            rs.getBigDecimal("amount"),
-                            rs.getString("type"),
-                            rs.getObject("transaction_date", LocalDateTime.class)));
-                }
-                return result;
-            }
-        } catch (SQLException e) {
-            throw new BankDataException("Не удалось загрузить транзакции счёта " + accountId, e);
+        return read("Не удалось загрузить транзакции счёта " + accountId, em -> em.createQuery(
+                        "select t from Transaction t "
+                                + "where t.account.id = :accountId and t.timestamp >= :from and t.timestamp < :to "
+                                + "order by t.timestamp, t.id", Transaction.class)
+                .setParameter("accountId", accountId)
+                .setParameter("from", from)
+                .setParameter("to", to)
+                .getResultList());
+    }
+
+    private Account lockAccount(EntityManager em, Long accountId) {
+        return em.createQuery("select a from Account a where a.id = :id", Account.class)
+                .setParameter("id", accountId)
+                .setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                .getResultStream()
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException("Счёт не найден: " + accountId));
+    }
+
+    /** Баланс обновится при commit благодаря dirty checking. */
+    private void apply(EntityManager em, Account account, BigDecimal delta, String type) {
+        account.setBalance(account.getBalance().add(delta));
+        em.persist(new Transaction(account, delta, type, LocalDateTime.now()));
+    }
+
+    private static <T> T require(EntityManager em, Class<T> type, Long id, String message) {
+        T entity = em.find(type, id);
+        if (entity == null) {
+            throw new NotFoundException(message + id);
         }
+        return entity;
     }
 
-    @FunctionalInterface
-    private interface TxWork<T> {
-        T run(Connection connection) throws SQLException;
-    }
-
-    private <T> T inTransaction(String errorMessage, TxWork<T> work) {
-        try (Connection c = Db.getConnection()) {
-            c.setAutoCommit(false);
-            try {
-                T result = work.run(c);
-                c.commit();
-                return result;
-            } catch (SQLException | RuntimeException e) {
-                c.rollback();
-                throw e;
-            }
-        } catch (SQLException e) {
+    private <T> T read(String errorMessage, Function<EntityManager, T> work) {
+        try (EntityManager em = factory.createEntityManager()) {
+            return work.apply(em);
+        } catch (PersistenceException e) {
             throw new BankDataException(errorMessage, e);
         }
     }
 
-    private Account lockAccount(Connection c, Long accountId) throws SQLException {
-        String sql = "SELECT id, client_id, account_number, balance FROM accounts WHERE id = ? FOR UPDATE";
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, accountId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    throw new NotFoundException("Счёт не найден: " + accountId);
+    private <T> T inTransaction(String errorMessage, Function<EntityManager, T> work) {
+        try (EntityManager em = factory.createEntityManager()) {
+            EntityTransaction tx = em.getTransaction();
+            tx.begin();
+            try {
+                T result = work.apply(em);
+                tx.commit();
+                return result;
+            } finally {
+                if (tx.isActive()) {
+                    tx.rollback();
                 }
-                return new Account(
-                        rs.getLong("id"),
-                        rs.getLong("client_id"),
-                        rs.getString("account_number"),
-                        rs.getBigDecimal("balance"));
             }
-        }
-    }
-
-    private void addToBalance(Connection c, Long accountId, BigDecimal delta) throws SQLException {
-        String sql = "UPDATE accounts SET balance = balance + ? WHERE id = ?";
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setBigDecimal(1, delta);
-            ps.setLong(2, accountId);
-            ps.executeUpdate();
-        }
-    }
-
-    private void recordTransaction(Connection c, Long accountId, BigDecimal amount, String type)
-            throws SQLException {
-        String sql = "INSERT INTO transactions (account_id, amount, type, transaction_date) "
-                + "VALUES (?, ?, ?, ?)";
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, accountId);
-            ps.setBigDecimal(2, amount);
-            ps.setString(3, type);
-            ps.setObject(4, LocalDateTime.now());
-            ps.executeUpdate();
+        } catch (PersistenceException e) {
+            throw new BankDataException(errorMessage, e);
         }
     }
 
