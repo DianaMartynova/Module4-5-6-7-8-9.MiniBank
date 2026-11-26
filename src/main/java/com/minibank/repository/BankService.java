@@ -1,4 +1,11 @@
-package com.minibank;
+package com.minibank.repository;
+
+import com.minibank.exception.BankDataException;
+import com.minibank.exception.InsufficientFundsException;
+import com.minibank.exception.NotFoundException;
+import com.minibank.model.Account;
+import com.minibank.model.Client;
+import com.minibank.model.Transaction;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
@@ -50,7 +57,7 @@ public class BankService {
             ps.setLong(1, accountId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
-                    throw new IllegalArgumentException("Счёт не найден: " + accountId);
+                    throw new NotFoundException("Счёт не найден: " + accountId);
                 }
                 return new Account(
                         rs.getLong("id"),
@@ -70,7 +77,7 @@ public class BankService {
             ps.setLong(1, clientId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
-                    throw new IllegalArgumentException("Клиент не найден: " + clientId);
+                    throw new NotFoundException("Клиент не найден: " + clientId);
                 }
                 return new Client(rs.getLong("id"), rs.getString("name"), rs.getString("email"));
             }
@@ -102,7 +109,7 @@ public class BankService {
             Account from = firstId.equals(fromAccountId) ? first : second;
 
             if (from.getBalance().compareTo(amount) < 0) {
-                throw new IllegalStateException("Недостаточно средств на счёте " + fromAccountId);
+                throw new InsufficientFundsException("Недостаточно средств на счёте " + fromAccountId);
             }
             addToBalance(c, fromAccountId, amount.negate());
             recordTransaction(c, fromAccountId, amount.negate(), "TRANSFER_OUT");
@@ -166,7 +173,7 @@ public class BankService {
             ps.setLong(1, accountId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
-                    throw new IllegalArgumentException("Счёт не найден: " + accountId);
+                    throw new NotFoundException("Счёт не найден: " + accountId);
                 }
                 return new Account(
                         rs.getLong("id"),

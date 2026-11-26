@@ -1,0 +1,12 @@
+# Build output
+/target/
+
+# IntelliJ IDEA
+/.idea/
+*.iml
+
+# OS / misc
+*.log
+
+# Для ручной проверки
+/requests.http
