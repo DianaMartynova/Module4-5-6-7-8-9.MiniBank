@@ -13,12 +13,37 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <postgresql.version>42.7.3</postgresql.version>
+        <liquibase.version>4.29.2</liquibase.version>
+        <jackson.version>2.17.2</jackson.version>
+        <hibernate.version>6.6.4.Final</hibernate.version>
     </properties>
 
-    <!--
-        На этом этапе никаких зависимостей не нужно — только голая Java.
-        Зависимости (postgresql, hibernate, spring-boot, kafka-clients)
-        появятся здесь по мере прохождения модулей — это тоже часть
-        задания, добавлять их будете сами.
-    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.liquibase</groupId>
+            <artifactId>liquibase-core</artifactId>
+            <version>${liquibase.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-core</artifactId>
+            <version>${hibernate.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-hikaricp</artifactId>
+            <version>${hibernate.version}</version>
+        </dependency>
+    </dependencies>
 </project>
